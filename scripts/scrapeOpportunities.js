@@ -67,7 +67,12 @@ const ExtractionSchema = z.object({
   endDate: z.string().nullable(),
   applicationDeadline: z.string().nullable(),
   applicationOpensDate: z.string().nullable(),
-  deadlineStatus: z.enum(['dated', 'rolling', 'upcoming', 'unclear']),
+  deadlineStatus: z.enum([
+    'dated',
+    'rolling',
+    'upcoming',
+    'unclear',
+  ]),
   gradeRangeLow: z.number().nullable(),
   gradeRangeHigh: z.number().nullable(),
   fields: z.array(z.enum(FIELD_TAXONOMY)),
@@ -83,7 +88,10 @@ const FETCH_TOOL = {
   input_schema: {
     type: 'object',
     properties: {
-      url: { type: 'string', description: 'Absolute URL to fetch' },
+      url: {
+        type: 'string',
+        description: 'Absolute URL to fetch',
+      },
     },
     required: ['url'],
   },
@@ -96,10 +104,14 @@ const SUBMIT_TOOL = {
   input_schema: {
     type: 'object',
     properties: {
-      name: { type: 'string', description: 'Official program/competition name' },
+      name: {
+        type: 'string',
+        description: 'Official program/competition name',
+      },
       about: {
         type: 'string',
-        description: '2-4 sentence plain-language description of what this program is and who it is for',
+        description:
+          '2-4 sentence plain-language description of what this program is and who it is for',
       },
       location: {
         type: ['string', 'null'],
@@ -108,9 +120,13 @@ const SUBMIT_TOOL = {
       },
       startDate: {
         type: ['string', 'null'],
-        description: 'Program start date, ISO 8601 (YYYY-MM-DD), or null if not stated/not applicable',
+        description:
+          'Program start date, ISO 8601 (YYYY-MM-DD), or null if not stated/not applicable',
       },
-      endDate: { type: ['string', 'null'], description: 'Program end date, ISO 8601, or null' },
+      endDate: {
+        type: ['string', 'null'],
+        description: 'Program end date, ISO 8601, or null',
+      },
       applicationDeadline: {
         type: ['string', 'null'],
         description:
@@ -129,13 +145,19 @@ const SUBMIT_TOOL = {
       },
       gradeRangeLow: {
         type: ['number', 'null'],
-        description: 'Lowest eligible US grade level (9-12), or null if not grade-restricted/not stated',
+        description:
+          'Lowest eligible US grade level (9-12), or null if not grade-restricted/not stated',
       },
-      gradeRangeHigh: { type: ['number', 'null'], description: 'Highest eligible US grade level (9-12), or null' },
+      gradeRangeHigh: {
+        type: ['number', 'null'],
+        description:
+          'Highest eligible US grade level (9-12), or null',
+      },
       fields: {
         type: 'array',
         items: { type: 'string', enum: FIELD_TAXONOMY },
-        description: 'One or more STEM fields this program covers, from the fixed list',
+        description:
+          'One or more STEM fields this program covers, from the fixed list',
       },
       eligibilityNotes: {
         type: ['string', 'null'],
@@ -191,11 +213,18 @@ When you have enough information (or have made a good-faith effort and still can
 
 function extractPageContent(html, baseUrl) {
   const $ = cheerio.load(html)
-  $('script, style, noscript, svg, nav, footer, header, iframe').remove()
+  $(
+    'script, style, noscript, svg, nav, footer, header, iframe'
+  ).remove()
 
   const title = $('title').first().text().trim()
-  const ogImage = $('meta[property="og:image"]').attr('content') || ''
-  const bodyText = $('body').text().replace(/\s+/g, ' ').trim().slice(0, 8000)
+  const ogImage =
+    $('meta[property="og:image"]').attr('content') || ''
+  const bodyText = $('body')
+    .text()
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 8000)
 
   const links = []
   const seen = new Set()
@@ -214,19 +243,30 @@ function extractPageContent(html, baseUrl) {
     links.push({ url: abs, text: text.slice(0, 80) })
   })
 
-  return { title, ogImage, bodyText, links: links.slice(0, 60) }
+  return {
+    title,
+    ogImage,
+    bodyText,
+    links: links.slice(0, 60),
+  }
 }
 
 async function fetchPage(browser, url) {
   const context = await browser.newContext()
   const page = await context.newPage()
   try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 })
+    await page.goto(url, {
+      waitUntil: 'domcontentloaded',
+      timeout: 20000,
+    })
     await page.waitForTimeout(1500)
     const html = await page.content()
     return { ok: true, ...extractPageContent(html, url) }
   } catch (err) {
-    return { ok: false, error: String(err && err.message ? err.message : err) }
+    return {
+      ok: false,
+      error: String(err && err.message ? err.message : err),
+    }
   } finally {
     await context.close()
   }
@@ -244,31 +284,52 @@ async function runExtraction(browser, anthropic, seedUrl) {
   let fetchCount = 0
 
   for (let turn = 0; turn < 8; turn++) {
-    const atFetchLimit = fetchCount >= MAX_FETCHES_PER_SOURCE
+    const atFetchLimit =
+      fetchCount >= MAX_FETCHES_PER_SOURCE
     const response = await anthropic.messages.create({
       model: MODEL,
       max_tokens: 8192,
       system: buildSystemPrompt(),
-      tools: atFetchLimit ? [SUBMIT_TOOL] : [FETCH_TOOL, SUBMIT_TOOL],
-      tool_choice: atFetchLimit ? { type: 'tool', name: 'submit_extraction' } : { type: 'auto' },
+      tools: atFetchLimit
+        ? [SUBMIT_TOOL]
+        : [FETCH_TOOL, SUBMIT_TOOL],
+      tool_choice: atFetchLimit
+        ? { type: 'tool', name: 'submit_extraction' }
+        : { type: 'auto' },
       messages,
     })
 
-    messages.push({ role: 'assistant', content: response.content })
+    messages.push({
+      role: 'assistant',
+      content: response.content,
+    })
 
-    const toolUses = response.content.filter((b) => b.type === 'tool_use')
+    const toolUses = response.content.filter(
+      (b) => b.type === 'tool_use'
+    )
     if (toolUses.length === 0) {
-      return { visited, error: 'model returned no tool call' }
+      return {
+        visited,
+        error: 'model returned no tool call',
+      }
     }
 
-    const submitCall = toolUses.find((t) => t.name === 'submit_extraction')
+    const submitCall = toolUses.find(
+      (t) => t.name === 'submit_extraction'
+    )
     if (submitCall) {
-      const parsed = ExtractionSchema.safeParse(submitCall.input)
+      const parsed = ExtractionSchema.safeParse(
+        submitCall.input
+      )
       return {
         visited,
         valid: parsed.success,
-        data: parsed.success ? parsed.data : submitCall.input,
-        zodError: parsed.success ? null : parsed.error.format(),
+        data: parsed.success
+          ? parsed.data
+          : submitCall.input,
+        zodError: parsed.success
+          ? null
+          : parsed.error.format(),
       }
     }
 
@@ -294,12 +355,19 @@ async function runExtraction(browser, anthropic, seedUrl) {
 // often just a one-off model formatting slip, not a repeatable problem
 // with the source. Still failing after the retry is treated as a real
 // fetch failure: the caller leaves the existing opportunities doc alone.
-async function runExtractionWithRetry(browser, anthropic, url) {
+async function runExtractionWithRetry(
+  browser,
+  anthropic,
+  url
+) {
   let first
   try {
     first = await runExtraction(browser, anthropic, url)
   } catch (err) {
-    first = { visited: [], error: String(err && err.message ? err.message : err) }
+    first = {
+      visited: [],
+      error: String(err && err.message ? err.message : err),
+    }
   }
   if (!first.error && first.valid) return first
 
@@ -307,10 +375,14 @@ async function runExtractionWithRetry(browser, anthropic, url) {
   try {
     second = await runExtraction(browser, anthropic, url)
   } catch (err) {
-    second = { visited: [], error: String(err && err.message ? err.message : err) }
+    second = {
+      visited: [],
+      error: String(err && err.message ? err.message : err),
+    }
   }
   second.retried = true
-  second.firstAttemptError = first.error || 'schema validation failure'
+  second.firstAttemptError =
+    first.error || 'schema validation failure'
   return second
 }
 
@@ -326,7 +398,8 @@ function loadEnvLocal(repoRoot) {
     const key = line.slice(0, eq).trim()
     let value = line.slice(eq + 1).trim()
     const quoted =
-      (value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
     if (quoted) value = value.slice(1, -1)
     if (!(key in process.env)) process.env[key] = value
   }
@@ -335,13 +408,26 @@ function loadEnvLocal(repoRoot) {
 // Same credential resolution as scripts/seed-opportunity-sources.js.
 function resolveCredential(admin) {
   const adcEnv = process.env.GOOGLE_APPLICATION_CREDENTIALS
-  const adcDefaultPath = path.join(os.homedir(), '.config', 'gcloud', 'application_default_credentials.json')
-  if ((adcEnv && fs.existsSync(adcEnv)) || fs.existsSync(adcDefaultPath)) {
+  const adcDefaultPath = path.join(
+    os.homedir(),
+    '.config',
+    'gcloud',
+    'application_default_credentials.json'
+  )
+  if (
+    (adcEnv && fs.existsSync(adcEnv)) ||
+    fs.existsSync(adcDefaultPath)
+  ) {
     return admin.credential.applicationDefault()
   }
   if (process.env.GCLOUD_ACCESS_TOKEN) {
     const token = process.env.GCLOUD_ACCESS_TOKEN
-    return { getAccessToken: async () => ({ access_token: token, expires_in: 3600 }) }
+    return {
+      getAccessToken: async () => ({
+        access_token: token,
+        expires_in: 3600,
+      }),
+    }
   }
   try {
     execFileSync('gcloud', ['--version'], { stdio: 'pipe' })
@@ -354,9 +440,13 @@ function resolveCredential(admin) {
   }
   return {
     getAccessToken: async () => {
-      const token = execFileSync('gcloud', ['auth', 'print-access-token'], {
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
+      const token = execFileSync(
+        'gcloud',
+        ['auth', 'print-access-token'],
+        {
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }
+      )
         .toString()
         .trim()
       return { access_token: token, expires_in: 3600 }
@@ -365,7 +455,11 @@ function resolveCredential(admin) {
 }
 
 function parseArgs(argv) {
-  const args = { dryRun: false, project: undefined, slugs: [] }
+  const args = {
+    dryRun: false,
+    project: undefined,
+    slugs: [],
+  }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--dry-run') {
@@ -389,12 +483,20 @@ async function mapWithConcurrency(items, limit, worker) {
       results[i] = await worker(items[i], i)
     }
   }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, runOne))
+  await Promise.all(
+    Array.from(
+      { length: Math.min(limit, items.length) },
+      runOne
+    )
+  )
   return results
 }
 
 function contentHashFor(data) {
-  return crypto.createHash('sha256').update(JSON.stringify(data)).digest('hex')
+  return crypto
+    .createHash('sha256')
+    .update(JSON.stringify(data))
+    .digest('hex')
 }
 
 // Both applicationDeadline and applicationOpensDate drive real Firestore
@@ -404,11 +506,18 @@ function contentHashFor(data) {
 // (mixed UTC offsets don't sort right) and the range query itself
 // (comparing a string field against a Timestamp query bound doesn't match
 // anything).
-function toTimestampOrNull(admin, slug, fieldName, isoString) {
+function toTimestampOrNull(
+  admin,
+  slug,
+  fieldName,
+  isoString
+) {
   if (!isoString) return null
   const parsed = new Date(isoString)
   if (Number.isNaN(parsed.getTime())) {
-    console.log(`  [WARN] ${slug}: unparseable ${fieldName} "${isoString}", storing null`)
+    console.log(
+      `  [WARN] ${slug}: unparseable ${fieldName} "${isoString}", storing null`
+    )
     return null
   }
   return admin.firestore.Timestamp.fromDate(parsed)
@@ -420,117 +529,168 @@ async function main() {
   loadEnvLocal(repoRoot)
 
   if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error('Missing ANTHROPIC_API_KEY (checked process.env and .env.local)')
+    throw new Error(
+      'Missing ANTHROPIC_API_KEY (checked process.env and .env.local)'
+    )
   }
-  const projectId = args.project || process.env.NEXT_PUBLIC_FB_PROJECT_ID
+  const projectId =
+    args.project || process.env.NEXT_PUBLIC_FB_PROJECT_ID
   if (!projectId) {
-    throw new Error('No project id: pass --project <id> or set NEXT_PUBLIC_FB_PROJECT_ID.')
+    throw new Error(
+      'No project id: pass --project <id> or set NEXT_PUBLIC_FB_PROJECT_ID.'
+    )
   }
 
   const admin = require('firebase-admin')
-  admin.initializeApp({ credential: resolveCredential(admin), projectId })
+  admin.initializeApp({
+    credential: resolveCredential(admin),
+    projectId,
+  })
   const db = admin.firestore()
-  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+  const anthropic = new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY,
+  })
 
-  let sourcesSnap = await db.collection('opportunity-sources').where('status', '==', 'active').get()
-  let sources = sourcesSnap.docs.map((d) => ({ slug: d.id, ...d.data() }))
+  let sourcesSnap = await db
+    .collection('opportunity-sources')
+    .where('status', '==', 'active')
+    .get()
+  let sources = sourcesSnap.docs.map((d) => ({
+    slug: d.id,
+    ...d.data(),
+  }))
   if (args.slugs.length) {
-    sources = sources.filter((s) => args.slugs.includes(s.slug))
+    sources = sources.filter((s) =>
+      args.slugs.includes(s.slug)
+    )
   }
 
   if (sources.length === 0) {
-    console.log('No active sources to scrape (check --dry-run filters or opportunity-sources status).')
+    console.log(
+      'No active sources to scrape (check --dry-run filters or opportunity-sources status).'
+    )
     return
   }
 
-  console.log(`Scraping ${sources.length} source(s), concurrency ${CONCURRENCY}, dryRun=${args.dryRun}`)
+  console.log(
+    `Scraping ${sources.length} source(s), concurrency ${CONCURRENCY}, dryRun=${args.dryRun}`
+  )
 
   const browser = await chromium.launch({ headless: true })
   let succeeded = 0
   let failed = 0
 
   try {
-    await mapWithConcurrency(sources, CONCURRENCY, async (source) => {
-      const { slug, url } = source
-      const start = Date.now()
-      const result = await runExtractionWithRetry(browser, anthropic, url)
-      const elapsed = ((Date.now() - start) / 1000).toFixed(1)
-
-      const now = admin.firestore.FieldValue.serverTimestamp()
-
-      if (result.error || !result.valid) {
-        failed += 1
-        const errorMessage = result.error || `schema validation failed: ${JSON.stringify(result.zodError)}`
-        console.log(`  [FAIL] ${slug} (${elapsed}s): ${errorMessage}`)
-        if (process.env.DEBUG_RAW) {
-          console.log(`  RAW DATA for ${slug}:`, JSON.stringify(result.data))
-        }
-        if (!args.dryRun) {
-          await db
-            .collection('opportunity-sources')
-            .doc(slug)
-            .update({
-              lastStatus: 'fetch_failed',
-              lastScrapedAt: now,
-              lastError: errorMessage.slice(0, 500),
-              consecutiveFailures: admin.firestore.FieldValue.increment(1),
-            })
-        }
-        return
-      }
-
-      succeeded += 1
-      const { reasoning, ...extracted } = result.data
-      console.log(`  [OK]   ${slug} (${elapsed}s): deadlineStatus=${extracted.deadlineStatus}`)
-
-      // startDate/endDate are display-only, so they stay as plain ISO
-      // strings -- see toTimestampOrNull for why the two queried date
-      // fields can't.
-      const applicationDeadline = toTimestampOrNull(
-        admin,
-        slug,
-        'applicationDeadline',
-        extracted.applicationDeadline
-      )
-      const applicationOpensDate = toTimestampOrNull(
-        admin,
-        slug,
-        'applicationOpensDate',
-        extracted.applicationOpensDate
-      )
-
-      if (!args.dryRun) {
-        const batch = db.batch()
-        batch.set(
-          db.collection('opportunities').doc(slug),
-          {
-            ...extracted,
-            applicationDeadline,
-            applicationOpensDate,
-            sourceUrl: url,
-            imageUrl: null,
-            imageFit: 'cover',
-            sourceType: source.sourceType || 'curated',
-            lastScrapedAt: now,
-            contentHash: contentHashFor(extracted),
-          },
-          { merge: true }
+    await mapWithConcurrency(
+      sources,
+      CONCURRENCY,
+      async (source) => {
+        const { slug, url } = source
+        const start = Date.now()
+        const result = await runExtractionWithRetry(
+          browser,
+          anthropic,
+          url
         )
-        batch.update(db.collection('opportunity-sources').doc(slug), {
-          lastStatus: 'ok',
-          lastScrapedAt: now,
-          lastError: null,
-          consecutiveFailures: 0,
-          verificationReasoning: reasoning,
-        })
-        await batch.commit()
+        const elapsed = (
+          (Date.now() - start) /
+          1000
+        ).toFixed(1)
+
+        const now =
+          admin.firestore.FieldValue.serverTimestamp()
+
+        if (result.error || !result.valid) {
+          failed += 1
+          const errorMessage =
+            result.error ||
+            `schema validation failed: ${JSON.stringify(
+              result.zodError
+            )}`
+          console.log(
+            `  [FAIL] ${slug} (${elapsed}s): ${errorMessage}`
+          )
+          if (process.env.DEBUG_RAW) {
+            console.log(
+              `  RAW DATA for ${slug}:`,
+              JSON.stringify(result.data)
+            )
+          }
+          if (!args.dryRun) {
+            await db
+              .collection('opportunity-sources')
+              .doc(slug)
+              .update({
+                lastStatus: 'fetch_failed',
+                lastScrapedAt: now,
+                lastError: errorMessage.slice(0, 500),
+                consecutiveFailures:
+                  admin.firestore.FieldValue.increment(1),
+              })
+          }
+          return
+        }
+
+        succeeded += 1
+        const { reasoning, ...extracted } = result.data
+        console.log(
+          `  [OK]   ${slug} (${elapsed}s): deadlineStatus=${extracted.deadlineStatus}`
+        )
+
+        // startDate/endDate are display-only, so they stay as plain ISO
+        // strings -- see toTimestampOrNull for why the two queried date
+        // fields can't.
+        const applicationDeadline = toTimestampOrNull(
+          admin,
+          slug,
+          'applicationDeadline',
+          extracted.applicationDeadline
+        )
+        const applicationOpensDate = toTimestampOrNull(
+          admin,
+          slug,
+          'applicationOpensDate',
+          extracted.applicationOpensDate
+        )
+
+        if (!args.dryRun) {
+          const batch = db.batch()
+          batch.set(
+            db.collection('opportunities').doc(slug),
+            {
+              ...extracted,
+              applicationDeadline,
+              applicationOpensDate,
+              sourceUrl: url,
+              imageUrl: null,
+              imageFit: 'cover',
+              sourceType: source.sourceType || 'curated',
+              lastScrapedAt: now,
+              contentHash: contentHashFor(extracted),
+            },
+            { merge: true }
+          )
+          batch.update(
+            db.collection('opportunity-sources').doc(slug),
+            {
+              lastStatus: 'ok',
+              lastScrapedAt: now,
+              lastError: null,
+              consecutiveFailures: 0,
+              verificationReasoning: reasoning,
+            }
+          )
+          await batch.commit()
+        }
       }
-    })
+    )
   } finally {
     await browser.close()
   }
 
-  console.log(`\nDone: ${succeeded} succeeded, ${failed} failed, out of ${sources.length}.`)
+  console.log(
+    `\nDone: ${succeeded} succeeded, ${failed} failed, out of ${sources.length}.`
+  )
 }
 
 main().catch((err) => {

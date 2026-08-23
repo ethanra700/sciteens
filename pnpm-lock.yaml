@@ -88,8 +88,8 @@ importers:
         specifier: ^6.1.200
         version: 6.1.200
       playwright:
-        specifier: ^1.62.1
-        version: 1.62.1
+        specifier: 1.61.1
+        version: 1.61.1
       prismic-dom:
         specifier: ^2.2.7
         version: 2.2.7
@@ -8623,12 +8623,6 @@ packages:
     engines: {node: '>=18'}
     hasBin: true
 
-  /playwright-core@1.62.1:
-    resolution: {integrity: sha512-wPYSwEBJY9GHraISXqyqtx0na0LpO3XEX7jNDhntbex7tzUS7kLnZsOlFruFJB4Hi/rhDMjXGqHewDZ68nYZVw==}
-    engines: {node: '>=20'}
-    hasBin: true
-    dev: false
-
   /playwright@1.61.1:
     resolution: {integrity: sha512-DWnY5o3YbLWK4GovuAVwpqL+1VwGNdUGrRr++8j8PtQQzvAVZUIMjKQ90fY689sEJZJBbZVw1rXaOKSTitkzPQ==}
     engines: {node: '>=18'}
@@ -8637,16 +8631,6 @@ packages:
       playwright-core: 1.61.1
     optionalDependencies:
       fsevents: 2.3.2
-
-  /playwright@1.62.1:
-    resolution: {integrity: sha512-0M+L3LAD8/nm554LOla9Ayx0j0tmFZ0FBcoQ7F1VuVHpM/XpiC8RcDzBQB8W5+hA8L22THxELzeF+2WcUzvcLg==}
-    engines: {node: '>=20'}
-    hasBin: true
-    dependencies:
-      playwright-core: 1.62.1
-    optionalDependencies:
-      fsevents: 2.3.2
-    dev: false
 
   /portfinder@1.0.38:
     resolution: {integrity: sha512-rEwq/ZHlJIKw++XtLAO8PPuOQA/zaPJOZJ37BVuN97nLpMJeuDVLVGRwbFoBgLudgdTMP2hdRJP++H+8QOA3vg==}
