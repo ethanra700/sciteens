@@ -1,12 +1,10 @@
 name: Discover Opportunity Sources
 
 on:
-  schedule:
-    - cron: '0 7 1 * *'
   workflow_dispatch:
     inputs:
       execute:
-        description: 'Write results to Firestore (leave unchecked for a dry run that only logs decisions)'
+        description: 'Write discovery results to Firestore. Leave unchecked for a dry run.'
         type: boolean
         default: false
 
@@ -44,11 +42,8 @@ jobs:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_SCRAPER_SA }}
 
-      # Scheduled runs always write. Manual runs are dry runs unless the
-      # "execute" box is ticked, so the pipeline can be inspected in CI
-      # logs before it is trusted to publish.
       - name: Discover new opportunity sources
         run: node scripts/discoverOpportunitySources.js --project "$GCP_PROJECT_ID" $EXECUTE_FLAG
         env:
           GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
-          EXECUTE_FLAG: ${{ (github.event_name == 'schedule' || inputs.execute == true) && '--execute' || '' }}
+          EXECUTE_FLAG: ${{ inputs.execute == true && '--execute' || '' }}

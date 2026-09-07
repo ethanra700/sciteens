@@ -29,6 +29,26 @@ Before you begin, make sure that you have both [Git](https://git-scm.com/downloa
 4. Type in `corepack pnpm dev` and visit localhost:3000 in your browser. This will show the development build!
 5. If you encounter an error at the step above, it's likely because you don't have access to the API keys. If you'd like to join the team to contribute to the website, [reach out](mailto:info@sciteens.com)!
 
+# Opportunity discovery
+
+The `Discover Opportunity Sources` GitHub Actions workflow runs only
+when an operator starts it. It has no scheduled trigger.
+
+1. Open the repository's **Actions** tab.
+2. Select **Discover Opportunity Sources**.
+3. Select **Run workflow**.
+4. Leave `execute` unchecked for a dry run.
+
+If you want to write the results to Firestore, select `execute`.
+The write run creates active sources for accepted programs and records
+final rejections. Each run performs a new search. A write run does not
+reuse results from a previous dry run.
+
+Discovery uses the `scrape-opportunities` environment and its existing
+GCP variables. Dry runs still call the model and fetch public pages.
+The separate `Scrape Opportunities` workflow continues its weekly
+refresh of active sources.
+
 # Scheduled social posts
 
 GitHub Actions runs the opportunity deadline post each Monday at
