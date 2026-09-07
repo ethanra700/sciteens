@@ -49,10 +49,32 @@ GCP variables. Dry runs still call the model and fetch public pages.
 The separate `Scrape Opportunities` workflow continues its weekly
 refresh of active sources.
 
+Discovery requires a successful HTTPS page fetch before the model verdict.
+An official source URL must match a successful fetch from that verification.
+Name mismatches remain eligible for another discovery run, including
+previous mismatch rejection records. Discovery decisions use
+`discoveryReasoning` and `discoveryRedFlags`. Scraper updates retain them.
+
+# Scheduled opportunity scraper
+
+GitHub Actions schedules the opportunity scraper each Monday at 06:00 UTC.
+The scraper completes the batch and saves successful results even when
+another source fails. Any failed source gives the process a nonzero exit
+status, so GitHub Actions marks the run as failed.
+
+If every prefetched page fails, the scraper stops extraction before the
+model call. When the transport supplies an error code, the failure record
+retains it. Public-address checks and URL provenance checks still apply.
+
+Both scripts use the same constrained browser transport. Initial redirects
+pass through the public-address guard before the browser receives the page.
+The browser blocks later redirects, service workers, and WebSockets.
+A blocked main-page redirect causes a fetch failure, not publication.
+
 # Scheduled social posts
 
-GitHub Actions runs the opportunity deadline post each Monday at
-12:30 UTC. It selects dated opportunities due in the next 30 days.
+GitHub Actions schedules the opportunity deadline post each Monday at
+10:00 UTC. It selects dated opportunities due in the next 30 days.
 Each carousel places the nearest deadline first. The workflow creates
 another ordered carousel when more than nine opportunities qualify.
 
@@ -62,6 +84,23 @@ Create a `social-posts` GitHub environment. Set these variables:
 - `GCP_WIF_PROVIDER`
 - `GCP_SCRAPER_SA`
 - `SITE_URL`
+
+The Google Cloud Workload Identity provider must accept the identity for
+the `social-posts` environment:
+
+```text
+repo:Sci-Teens/sciteens:environment:social-posts
+```
+
+Keep the repository, branch, and workflow restrictions in the provider's
+attribute condition. The service account must also grant
+`roles/iam.workloadIdentityUser` to this identity.
+The `scrape-opportunities` environment uses a different identity.
+Access for that environment does not authorize `social-posts`.
+
+If authentication reports `The given credential is rejected by the attribute condition.`,
+inspect the provider's attribute condition before the service account policy.
+The scheduler does not start when this check fails.
 
 Set the `BUFFER_API_KEY` secret. The workflow uses the `Directed Relic`
 Buffer project by default. Set `BUFFER_ORGANIZATION_NAME` only to use

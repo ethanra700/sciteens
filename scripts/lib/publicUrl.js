@@ -168,6 +168,7 @@ function requestPinnedUrl(
   { address, family, headers, signal }
 ) {
   const parsed = new URL(url)
+  parsed.hash = ''
   const client = parsed.protocol === 'https:' ? https : http
   const requestHeaders = Object.fromEntries(
     new Headers(headers || {}).entries()
@@ -208,13 +209,16 @@ function requestPinnedUrl(
         const body = [101, 204, 205, 304].includes(status)
           ? null
           : Readable.toWeb(incoming)
-        resolve(
-          new Response(body, {
-            status,
-            statusText: incoming.statusMessage,
-            headers: responseHeaders,
-          })
-        )
+        if (body === null) incoming.resume()
+        const response = new Response(body, {
+          status,
+          statusText: incoming.statusMessage,
+          headers: responseHeaders,
+        })
+        Object.defineProperty(response, 'url', {
+          value: parsed.toString(),
+        })
+        resolve(response)
       }
     )
     request.on('error', reject)
@@ -265,6 +269,7 @@ async function fetchPublicUrl(
     }
     const location = response.headers.get('location')
     if (!location) return response
+    await response.body?.cancel()
     target = new URL(location, target).toString()
   }
   throw new Error(

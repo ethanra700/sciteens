@@ -20,10 +20,10 @@ const CandidatesSchema = z.object({
   candidates: z.array(CandidateSchema),
 })
 
-// Reasons that describe the fetch rather than the program. A reject for
-// one of these is not written to Firestore, so the candidate can be
-// proposed again next run instead of being blacklisted for a bad day.
+// Fetch failures and name/URL mismatches do not establish that a program
+// is unsuitable. Do not persist them as global source exclusions.
 const RETRYABLE_REJECT_REASONS = new Set([
+  'not_this_program',
   'page_inaccessible',
   'insufficient_content',
 ])
@@ -64,12 +64,38 @@ function isRetryableReject(verdict) {
   )
 }
 
+const TRACKING_PARAMS = new Set([
+  'utm_source',
+  'utm_medium',
+  'utm_campaign',
+  'utm_term',
+  'utm_content',
+  'utm_id',
+  'utm_source_platform',
+  'utm_creative_format',
+  'utm_marketing_tactic',
+  'gclid',
+  'dclid',
+  'fbclid',
+  'msclkid',
+  'mc_cid',
+  'mc_eid',
+])
+
 function normalizeUrl(url) {
   try {
     const u = new URL(url)
+    for (const key of [...u.searchParams.keys()]) {
+      if (TRACKING_PARAMS.has(key.toLowerCase())) {
+        u.searchParams.delete(key)
+      }
+    }
+    // Sort parameter names, but preserve the order of repeated values.
+    u.searchParams.sort()
     return (
-      u.hostname.toLowerCase().replace(/^www\./, '') +
-      u.pathname.replace(/\/+$/, '')
+      u.host.toLowerCase().replace(/^www\./, '') +
+      u.pathname.replace(/\/+$/, '') +
+      u.search
     )
   } catch {
     return String(url)
@@ -206,7 +232,10 @@ async function resolveFinalUrl(url, { request } = {}) {
     }
     if (!REDIRECT_STATUSES.has(response.status)) {
       return {
-        ok: response.status < 400,
+        ok:
+          response.status >= 200 &&
+          response.status < 300 &&
+          new URL(target).protocol === 'https:',
         url: target,
         status: response.status,
       }
@@ -218,7 +247,14 @@ async function resolveFinalUrl(url, { request } = {}) {
         error: 'redirect without location',
       }
     }
-    target = new URL(location, target).toString()
+    try {
+      target = new URL(location, target).toString()
+    } catch {
+      return {
+        ok: false,
+        error: 'The redirect URL is invalid.',
+      }
+    }
   }
   return { ok: false, error: 'too many redirects' }
 }

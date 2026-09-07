@@ -13,13 +13,63 @@ import {
 } from './opportunityDiscovery.js'
 
 describe('normalizeUrl', () => {
-  it('ignores scheme, www, trailing slash, query and hash', () => {
+  it('ignores scheme, www, trailing slash, known tracking parameters and hash', () => {
     expect(normalizeUrl('https://www.Promys.org/')).toBe(
       'promys.org'
     )
     expect(
-      normalizeUrl('http://promys.org/apply/?utm=x#top')
+      normalizeUrl(
+        'http://promys.org/apply/?utm_source=search&fbclid=123#top'
+      )
     ).toBe('promys.org/apply')
+  })
+
+  it('keeps distinct programs on a query-driven endpoint', () => {
+    const first = normalizeUrl(
+      'https://example.org/program?id=1'
+    )
+    const second = normalizeUrl(
+      'https://example.org/program?id=2'
+    )
+    expect(first).not.toBe(second)
+    expect(
+      uniqueSlug(
+        'Academy',
+        'https://example.org/program?id=1',
+        new Set(['academy'])
+      )
+    ).not.toBe(
+      uniqueSlug(
+        'Academy',
+        'https://example.org/program?id=2',
+        new Set(['academy'])
+      )
+    )
+  })
+
+  it('canonicalizes parameter names without removing functional parameters', () => {
+    expect(
+      normalizeUrl(
+        'https://example.org/program?lang=en&id=2&utm_source=email'
+      )
+    ).toBe(
+      normalizeUrl(
+        'https://example.org/program?id=2&lang=en'
+      )
+    )
+    expect(
+      normalizeUrl(
+        'https://example.org/?utm=keep&ref=course'
+      )
+    ).toBe('example.org?ref=course&utm=keep')
+    expect(
+      normalizeUrl('https://example.org/?id=2&id=1')
+    ).not.toBe(
+      normalizeUrl('https://example.org/?id=1&id=2')
+    )
+    expect(
+      normalizeUrl('https://example.org:8443/program')
+    ).not.toBe(normalizeUrl('https://example.org/program'))
   })
 
   it('returns malformed input unchanged', () => {
@@ -192,7 +242,7 @@ describe('schemas', () => {
     ).toBe(true)
   })
 
-  it('treats fetch problems as retryable and judgements as final', () => {
+  it('treats fetch problems and name mismatches as retryable', () => {
     const reject = (rejectReason) => ({
       verdict: 'reject',
       rejectReason,
@@ -208,7 +258,7 @@ describe('schemas', () => {
     ).toBe(false)
     expect(
       isRetryableReject(reject('not_this_program'))
-    ).toBe(false)
+    ).toBe(true)
     expect(
       isRetryableReject({
         verdict: 'publish',
@@ -291,7 +341,39 @@ describe('resolveFinalUrl', () => {
       { request }
     )
     expect(result.ok).toBe(false)
-    expect(result.error).toMatch(/non-public/)
+  })
+
+  it('does not accept a public HTTP destination', async () => {
+    const request = stubHops([
+      {
+        status: 302,
+        location: 'http://example.org/program',
+      },
+      { status: 200 },
+    ])
+    const result = await resolveFinalUrl(
+      'https://example.com/redirect',
+      { request }
+    )
+    expect(result.ok).toBe(false)
+  })
+
+  it('accepts an HTTP source only after an HTTPS upgrade', async () => {
+    const request = stubHops([
+      {
+        status: 301,
+        location: 'https://example.org/program',
+      },
+      { status: 200 },
+    ])
+    await expect(
+      resolveFinalUrl('http://example.org/program', {
+        request,
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      url: 'https://example.org/program',
+    })
   })
 
   it('gives up after the hop budget', async () => {

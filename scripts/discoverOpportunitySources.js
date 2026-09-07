@@ -29,18 +29,14 @@ const os = require('node:os')
 const path = require('node:path')
 const { execFileSync } = require('node:child_process')
 const { chromium } = require('playwright')
-const cheerio = require('cheerio')
 const {
   GoogleGenAI,
   FunctionCallingConfigMode,
 } = require('@google/genai')
-const { extractPageMarkdown } = require('./lib/pageContent')
 const {
-  fetchPublicUrlOnce,
-  isNonNetworkScheme,
-  publicHttpUrlOrNull,
-  readResponseBuffer,
-} = require('./lib/publicUrl')
+  BROWSER_LAUNCH_OPTIONS,
+  fetchPage,
+} = require('./lib/opportunityPage')
 const {
   CandidatesSchema,
   REJECT_REASONS,
@@ -60,8 +56,6 @@ const MAX_OUTPUT_TOKENS = 8192
 const MAX_VERIFY_TURNS = 4
 const DEFAULT_MAX_PER_QUERY = 8
 const PAGE_BODY_CHARS = 6000
-const PAGE_RESOURCE_TIMEOUT_MS = 12_000
-const MAX_PAGE_RESOURCE_BYTES = 15 * 1024 * 1024
 
 const REPO_ROOT = path.resolve(__dirname, '..')
 const SOURCES_DATA_FILE = path.join(
@@ -255,9 +249,8 @@ function loadQueryTemplates() {
   return templates
 }
 
-// Every source the site already knows about, from the curated file and
-// (unless --offline) every opportunity-sources doc regardless of status.
-// A rejected doc counts: it must never be re-proposed.
+// Reserve all document IDs, but do not globally exclude sources whose
+// previous rejection only established a fetch failure or name mismatch.
 async function loadKnownSources(db) {
   const known = {
     urls: new Set(),
@@ -279,6 +272,17 @@ async function loadKnownSources(db) {
     for (const doc of snapshot.docs) {
       const data = doc.data()
       known.slugs.add(doc.id)
+      if (
+        isRetryableReject({
+          verdict:
+            data.status === 'rejected'
+              ? 'reject'
+              : 'publish',
+          rejectReason: data.rejectReason,
+        })
+      ) {
+        continue
+      }
       if (data.url) known.urls.add(normalizeUrl(data.url))
       if (
         data.label &&
@@ -398,125 +402,6 @@ const SUBMIT_VERDICT_TOOL = {
   },
 }
 
-function extractPageContent(html, baseUrl) {
-  const $ = cheerio.load(html)
-  const title = $('title').first().text().trim()
-  const bodyMarkdown = extractPageMarkdown(
-    html,
-    baseUrl
-  ).slice(0, PAGE_BODY_CHARS)
-  const links = []
-  const seen = new Set()
-  $('a[href]').each((_, el) => {
-    const href = $(el).attr('href')
-    const text = $(el).text().replace(/\s+/g, ' ').trim()
-    if (!href || !text) return
-    let abs
-    try {
-      abs = new URL(href, baseUrl).toString()
-    } catch {
-      return
-    }
-    if (seen.has(abs)) return
-    seen.add(abs)
-    links.push({ url: abs, text: text.slice(0, 80) })
-  })
-  return { title, bodyMarkdown, links: links.slice(0, 40) }
-}
-
-// Mirrors scrapeOpportunities.js: every sub-resource request is routed
-// through the pinned, private-address-guarded fetch so a page the model
-// chose cannot steer the browser at internal endpoints.
-async function fetchPage(browser, url) {
-  const safeUrl = await publicHttpUrlOrNull(url)
-  if (!safeUrl) {
-    return {
-      ok: false,
-      error: `refused to fetch non-public URL: ${String(
-        url
-      ).slice(0, 200)}`,
-    }
-  }
-  const context = await browser.newContext()
-  await context.route('**/*', async (route) => {
-    const request = route.request()
-    const requestUrl = request.url()
-    let parsed
-    try {
-      parsed = new URL(requestUrl)
-    } catch {
-      return route.abort('blockedbyclient')
-    }
-    if (isNonNetworkScheme(parsed.protocol)) {
-      return route.continue()
-    }
-    if (request.method() !== 'GET') {
-      return route.abort('blockedbyclient')
-    }
-    const controller = new AbortController()
-    const timer = setTimeout(
-      () => controller.abort(),
-      PAGE_RESOURCE_TIMEOUT_MS
-    )
-    try {
-      const headers = {
-        ...request.headers(),
-        'accept-encoding': 'identity',
-      }
-      delete headers.host
-      delete headers['content-length']
-      const response = await fetchPublicUrlOnce(
-        requestUrl,
-        {
-          headers,
-          signal: controller.signal,
-        }
-      )
-      const body = response.body
-        ? await readResponseBuffer(
-            response,
-            MAX_PAGE_RESOURCE_BYTES
-          )
-        : Buffer.alloc(0)
-      const responseHeaders = Object.fromEntries(
-        response.headers.entries()
-      )
-      delete responseHeaders['content-length']
-      delete responseHeaders['transfer-encoding']
-      return route.fulfill({
-        status: response.status,
-        headers: responseHeaders,
-        body,
-      })
-    } catch {
-      return route.abort('blockedbyclient')
-    } finally {
-      clearTimeout(timer)
-    }
-  })
-  const page = await context.newPage()
-  try {
-    await page.goto(safeUrl, {
-      waitUntil: 'domcontentloaded',
-      timeout: 20000,
-    })
-    await page.waitForTimeout(1500)
-    const html = await page.content()
-    return {
-      ok: true,
-      finalUrl: page.url(),
-      ...extractPageContent(html, safeUrl),
-    }
-  } catch (err) {
-    return {
-      ok: false,
-      error: String(err && err.message ? err.message : err),
-    }
-  } finally {
-    await context.close()
-  }
-}
-
 function buildSearchPrompt(query) {
   return `${query}
 
@@ -608,12 +493,14 @@ re-buckets deadlines automatically once a program is published):
 Set rejectReason to "none" when publishing. When rejecting, set it to
 the single best fit. Use
 page_inaccessible when the page could not be loaded or was blocked
-(404, WAF, captcha, timeout) and insufficient_content when it loaded
-but said nothing usable -- those describe the fetch, not the program,
-and the candidate will simply be retried later. Every other reason is
-a judgement about the program itself and is final.
+(404, WAF, captcha, timeout), insufficient_content when it loaded
+but said nothing usable, and not_this_program for a name/content
+mismatch. Those candidates can return in a later run. Other rejection
+reasons describe the program itself and are final.
 
-Use fetch_page to inspect the site, then call submit_verdict.`
+The initial candidate page appears below. Use fetch_page for additional
+pages as needed, then call submit_verdict. Report an officialUrl only
+after a successful fetch of that page during this verification.`
 }
 
 async function discoverCandidates(
@@ -751,14 +638,64 @@ async function discoverCandidates(
   return kept
 }
 
-async function verifyCandidate(browser, genai, candidate) {
+async function verifyCandidate(
+  browser,
+  genai,
+  candidate,
+  { fetchPage: fetch = fetchPage } = {}
+) {
   const today = new Date().toISOString().slice(0, 10)
-  let resolvedUrl = candidate.url
+  const successfulFetches = []
+  async function fetchEvidence(url) {
+    let result
+    try {
+      result = await fetch(browser, url)
+    } catch (err) {
+      return {
+        ok: false,
+        error: String(err.message || err),
+      }
+    }
+    if (!result.ok) return result
+    const finalUrl = httpsUrlOrNull(result.finalUrl)
+    if (!finalUrl) {
+      return {
+        ok: false,
+        error: 'The final page URL must use HTTPS.',
+      }
+    }
+    successfulFetches.push({ requestedUrl: url, finalUrl })
+    return {
+      ok: true,
+      finalUrl,
+      title: result.title,
+      bodyMarkdown: result.bodyMarkdown?.slice(
+        0,
+        PAGE_BODY_CHARS
+      ),
+      links: result.links?.slice(0, 40),
+    }
+  }
+  const initialPage = await fetchEvidence(candidate.url)
+  if (!initialPage.ok) {
+    return rejectVerdict(
+      `The candidate page could not be verified: ${
+        initialPage.error || 'The fetch failed.'
+      }`,
+      candidate.url
+    )
+  }
+  const resolvedUrl = initialPage.finalUrl
   const contents = [
     {
       role: 'user',
       parts: [
         { text: buildVerifyPrompt(candidate, today) },
+        {
+          text: `Initial candidate page:\n${JSON.stringify(
+            initialPage
+          )}`,
+        },
       ],
     },
   ]
@@ -817,18 +754,29 @@ async function verifyCandidate(browser, genai, candidate) {
           resolvedUrl
         )
       }
-      return { ...parsed.data, resolvedUrl }
+      const verdict = {
+        ...parsed.data,
+        resolvedUrl,
+        successfulFetches,
+      }
+      if (!chooseSourceUrl(verdict)) {
+        return rejectVerdict(
+          'The official page has no successful HTTPS fetch in this verification.',
+          resolvedUrl
+        )
+      }
+      return verdict
     }
 
     const responseParts = []
     for (const call of calls) {
-      const result = await fetchPage(
-        browser,
-        call.args?.url
-      )
-      if (result.ok && resolvedUrl === candidate.url) {
-        resolvedUrl = result.finalUrl
-      }
+      const result =
+        call.name === 'fetch_page'
+          ? await fetchEvidence(call.args?.url)
+          : {
+              ok: false,
+              error: 'The tool name is unknown.',
+            }
       responseParts.push({
         functionResponse: {
           name: call.name,
@@ -856,27 +804,37 @@ function rejectVerdict(reasoning, resolvedUrl) {
   }
 }
 
-// Prefer the program's own page over the article we found it in, but
-// only if it is public and actually resolves. A reject keeps the URL
-// that was actually judged; swapping in officialUrl there would key the
-// rejection on a page nobody evaluated.
-async function chooseSourceUrl(verdict) {
-  if (
-    verdict.verdict === 'publish' &&
-    verdict.officialUrl
-  ) {
-    const safe = await publicHttpUrlOrNull(
-      verdict.officialUrl
+function httpsUrlOrNull(value) {
+  try {
+    const url = new URL(value)
+    if (
+      url.protocol !== 'https:' ||
+      url.username ||
+      url.password
     )
-    if (safe) {
-      const resolved = await resolveFinalUrl(safe)
-      if (resolved.ok) return resolved.url
-    }
-    console.log(
-      `     official url unusable, keeping fetched url (${verdict.officialUrl})`
-    )
+      return null
+    url.hash = ''
+    return url.toString()
+  } catch {
+    return null
   }
-  return verdict.resolvedUrl
+}
+
+// A URL becomes a source only when this verifier successfully fetched it.
+// A requested URL maps to the final page whose content the model received.
+function chooseSourceUrl(verdict) {
+  const target =
+    verdict.verdict === 'publish' && verdict.officialUrl
+      ? verdict.officialUrl
+      : verdict.resolvedUrl
+  const key = httpsUrlOrNull(target)
+  if (!key) return null
+  const evidence = verdict.successfulFetches?.find(
+    ({ requestedUrl, finalUrl }) =>
+      httpsUrlOrNull(requestedUrl) === key ||
+      httpsUrlOrNull(finalUrl) === key
+  )
+  return evidence ? httpsUrlOrNull(evidence.finalUrl) : null
 }
 
 function sourceDocument(
@@ -895,8 +853,8 @@ function sourceDocument(
     status:
       verdict.verdict === 'publish' ? 'active' : 'rejected',
     rejectReason: verdict.rejectReason,
-    verificationReasoning: verdict.reasoning,
-    verificationRedFlags: verdict.redFlags,
+    discoveryReasoning: verdict.reasoning,
+    discoveryRedFlags: verdict.redFlags,
     discoveredAt: admin
       ? admin.firestore.FieldValue.serverTimestamp()
       : new Date().toISOString(),
@@ -974,7 +932,9 @@ async function main() {
     return
   }
 
-  const browser = await chromium.launch({ headless: true })
+  const browser = await chromium.launch(
+    BROWSER_LAUNCH_OPTIONS
+  )
   const decisions = []
   let retryLater = 0
   try {
@@ -1002,11 +962,15 @@ async function main() {
       if (isRetryableReject(verdict)) {
         retryLater += 1
         console.log(
-          '  [skip] fetch problem, not a judgement -- nothing written, eligible again next run'
+          '  [skip] Verification is incomplete or the name does not match. The candidate can return in a later run.'
         )
         continue
       }
-      const sourceUrl = await chooseSourceUrl(verdict)
+      const sourceUrl = chooseSourceUrl(verdict)
+      if (!sourceUrl) {
+        retryLater += 1
+        continue
+      }
       const key = normalizeUrl(sourceUrl)
       if (known.urls.has(key)) {
         console.log(
@@ -1070,7 +1034,17 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(err)
-  process.exit(1)
-})
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(err)
+    process.exitCode = 1
+  })
+}
+
+module.exports = {
+  chooseSourceUrl,
+  loadKnownSources,
+  parseArgs,
+  sourceDocument,
+  verifyCandidate,
+}
