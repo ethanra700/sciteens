@@ -199,14 +199,22 @@ function resolveCredential(admin) {
   )
 }
 
+function usingFirestoreEmulator() {
+  return Boolean(process.env.FIRESTORE_EMULATOR_HOST)
+}
+
 // Production runs bill through Vertex AI on the project's GCP account,
 // like the weekly scraper. GEMINI_API_KEY (Gemini Developer API) is only
-// honoured for dry runs so the pipeline can be exercised locally without
-// GCP access.
+// honoured for dry runs and emulator runs, so the pipeline can be
+// exercised locally without GCP access but never writes to production
+// on a personal key.
 function createGenAI(args, projectId) {
-  if (process.env.GEMINI_API_KEY && !args.execute) {
+  if (
+    process.env.GEMINI_API_KEY &&
+    (!args.execute || usingFirestoreEmulator())
+  ) {
     console.log(
-      'Using GEMINI_API_KEY (Gemini Developer API) for this dry run; --execute runs use Vertex AI.'
+      'Using GEMINI_API_KEY (Gemini Developer API); production --execute runs use Vertex AI.'
     )
     return new GoogleGenAI({
       apiKey: process.env.GEMINI_API_KEY,
@@ -356,11 +364,14 @@ const SUBMIT_VERDICT_TOOL = {
         type: 'string',
         enum: ['publish', 'reject'],
       },
+      // A plain string enum, like the scraper's deadlineStatus: Gemini's
+      // schema validation has only accepted string enum members, so
+      // "none" stands in for null and is mapped back in code.
       rejectReason: {
-        type: ['string', 'null'],
-        enum: [...REJECT_REASONS, null],
+        type: 'string',
+        enum: [...REJECT_REASONS, 'none'],
         description:
-          'null when publishing. When rejecting, the single best-fitting reason: not_this_program (page is about a different program), page_inaccessible (could not load, blocked, 404, WAF/captcha), insufficient_content (page loads but says nothing usable), defunct, not_high_school, not_legitimate, not_stem.',
+          '"none" when publishing. When rejecting, the single best-fitting reason: not_this_program (page is about a different program), page_inaccessible (could not load, blocked, 404, WAF/captcha), insufficient_content (page loads but says nothing usable), defunct, not_high_school, not_legitimate, not_stem.',
       },
       reasoning: {
         type: 'string',
@@ -594,7 +605,8 @@ re-buckets deadlines automatically once a program is published):
    General career readiness, leadership, college-prep, writing, or
    other non-STEM programs must be rejected even when legitimate.
 
-When rejecting, set rejectReason to the single best fit. Use
+Set rejectReason to "none" when publishing. When rejecting, set it to
+the single best fit. Use
 page_inaccessible when the page could not be loaded or was blocked
 (404, WAF, captcha, timeout) and insufficient_content when it loaded
 but said nothing usable -- those describe the fetch, not the program,
@@ -793,9 +805,10 @@ async function verifyCandidate(browser, genai, candidate) {
       (c) => c.name === 'submit_verdict'
     )
     if (submitCall) {
-      const parsed = VerdictSchema.safeParse(
-        submitCall.args
-      )
+      const args = { ...submitCall.args }
+      if (args.rejectReason === 'none')
+        args.rejectReason = null
+      const parsed = VerdictSchema.safeParse(args)
       if (!parsed.success) {
         return rejectVerdict(
           `verdict failed validation: ${JSON.stringify(
@@ -913,10 +926,19 @@ async function main() {
       )
     }
     admin = require('firebase-admin')
-    admin.initializeApp({
-      credential: resolveCredential(admin),
-      projectId,
-    })
+    if (usingFirestoreEmulator()) {
+      // The emulator accepts unauthenticated admin traffic; asking for
+      // real credentials here would only block local testing.
+      console.log(
+        `Using the Firestore emulator at ${process.env.FIRESTORE_EMULATOR_HOST}.`
+      )
+      admin.initializeApp({ projectId })
+    } else {
+      admin.initializeApp({
+        credential: resolveCredential(admin),
+        projectId,
+      })
+    }
     db = admin.firestore()
   } else {
     console.log(
