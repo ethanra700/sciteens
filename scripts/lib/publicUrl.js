@@ -179,8 +179,16 @@ function requestPinnedUrl(
       {
         headers: requestHeaders,
         signal,
-        lookup: (_hostname, _options, callback) => {
-          callback(null, address, family)
+        // Node 20+ connects with autoSelectFamily on, which calls lookup
+        // with { all: true } and expects an array of { address, family };
+        // handing it the bare address there fails with
+        // "Invalid IP address: undefined".
+        lookup: (_hostname, options, callback) => {
+          if (options && options.all) {
+            callback(null, [{ address, family }])
+          } else {
+            callback(null, address, family)
+          }
         },
       },
       (incoming) => {

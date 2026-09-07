@@ -1,4 +1,5 @@
 import dns from 'node:dns/promises'
+import http from 'node:http'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -11,6 +12,7 @@ import {
   isPrivateIpv6,
   MAX_REDIRECTS,
   publicHttpUrlOrNull,
+  requestPinnedUrl,
   resolvePublicTarget,
   readResponseBuffer,
 } from './publicUrl.js'
@@ -224,6 +226,29 @@ describe('readResponseBuffer', () => {
     await expect(
       readResponseBuffer(response, 10)
     ).resolves.toEqual(Buffer.from('1234567890'))
+  })
+})
+
+describe('requestPinnedUrl', () => {
+  it('connects on Node 20+ where net asks lookup for all addresses', async () => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/plain' })
+      res.end('pinned')
+    })
+    await new Promise((resolve) =>
+      server.listen(0, '127.0.0.1', resolve)
+    )
+    const { port } = server.address()
+    try {
+      const response = await requestPinnedUrl(
+        `http://pinned.test:${port}/`,
+        { address: '127.0.0.1', family: 4 }
+      )
+      expect(response.status).toBe(200)
+      expect(await response.text()).toBe('pinned')
+    } finally {
+      await new Promise((resolve) => server.close(resolve))
+    }
   })
 })
 
